@@ -2,13 +2,12 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
-from dateutil.relativedelta import relativedelta
 from io import BytesIO
 
 st.set_page_config(page_title="Mortgage Calculator & Amortization 2025", layout="wide")
 
 st.title("🏠 Mortgage Calculator & Amortization Schedule")
-st.caption("Accurate payments • Extended terms (40/50 years) • Property tax included • Extra payments • 2025 ready")
+st.caption("Accurate payments • Extended terms • Property tax included • Extra payments with real savings • 2025 ready")
 
 # --- SIDEBAR INPUTS ---
 with st.sidebar:
@@ -23,12 +22,11 @@ with st.sidebar:
     
     interest_rate = st.slider("Annual Interest Rate (%)", min_value=2.0, max_value=12.0, value=6.75, step=0.125)
     
-    # Extended terms added
     loan_term_years = st.selectbox("Loan Term (Years)", [15, 20, 30, 40, 50], index=2)
     
     st.markdown("---")
     st.header("🏡 Property Tax & Insurance (Optional)")
-    annual_property_tax = st.number_input("Annual Property Tax ($)", min_value=0.0, value=4800.0, step=100.0, help="Typical: 1-1.5% of home value")
+    annual_property_tax = st.number_input("Annual Property Tax ($)", min_value=0.0, value=4800.0, step=100.0)
     annual_home_insurance = st.number_input("Annual Homeowners Insurance ($)", min_value=0.0, value=1200.0, step=100.0)
     
     monthly_tax = annual_property_tax / 12
@@ -38,31 +36,31 @@ with st.sidebar:
     
     st.markdown("---")
     st.header("📅 Extra Payments (Optional)")
-    extra_monthly = st.number_input("Extra Monthly Payment ($)", min_value=0.0, value=0.0, step=50.0, help="Applied to principal each month")
+    extra_monthly = st.number_input("Extra Monthly Payment ($)", min_value=0.0, value=0.0, step=50.0, help="Applied to principal")
     extra_one_time = st.number_input("One-Time Extra Payment ($)", min_value=0.0, value=0.0, step=1000.0)
-    extra_one_time_month = st.slider("Apply One-Time Payment in Month #", min_value=1, max_value=loan_term_years*12, value=12, disabled=(extra_one_time == 0))
+    extra_one_time_month = st.slider("Apply One-Time in Month #", min_value=1, max_value=loan_term_years*12, value=12, disabled=(extra_one_time == 0))
 
 # --- CALCULATIONS ---
 monthly_rate = interest_rate / 100 / 12
 num_payments = loan_term_years * 12
 
-# Base P&I payment
+# Base P&I
 if monthly_rate > 0:
     monthly_pi = principal * (monthly_rate * (1 + monthly_rate)**num_payments) / ((1 + monthly_rate)**num_payments - 1)
 else:
     monthly_pi = principal / num_payments
 
-# Monthly payment with extras (recurring extra_monthly added)
 monthly_payment_base = monthly_pi + monthly_tax + monthly_insurance
 monthly_payment_with_extra = monthly_payment_base + extra_monthly
 
+# Standard scenario (no extras)
 total_paid_standard = monthly_payment_base * num_payments
 total_interest_standard = (monthly_pi * num_payments) - principal
-total_tax_paid = monthly_tax * num_payments
-total_insurance_paid = monthly_insurance * num_payments
 
-# With extra payments
-if extra_monthly > 0 or extra_one_time > 0:
+# Scenario with extras
+has_extras = extra_monthly > 0 or extra_one_time > 0
+
+if has_extras:
     balance = principal
     schedule = []
     total_interest_extra = 0
@@ -98,41 +96,43 @@ if extra_monthly > 0 or extra_one_time > 0:
             break
     
     df_amort = pd.DataFrame(schedule)
-    actual_payments = len(df_amort)
-    total_paid_extra = df_amort["Total Payment"].sum()
-    total_interest_extra = df_amort["Interest"].sum()
-    years_saved = (num_payments - actual_payments) / 12
+    actual_months = len(df_amort)
+    total_paid_actual = df_amort["Total Payment"].sum()
+    total_interest_actual = df_amort["Interest"].sum()
+    years_saved = (num_payments - actual_months) / 12
 else:
     df_amort = None
+    actual_months = num_payments
+    total_paid_actual = total_paid_standard
+    total_interest_actual = total_interest_standard
     years_saved = 0
-    total_paid_extra = total_paid_standard
-    total_interest_extra = total_interest_standard
 
 # --- MAIN DASHBOARD ---
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Base Monthly Payment (PITI)", f"${monthly_payment_base:,.2f}")
-col2.metric("With Extra Monthly", f"${monthly_payment_with_extra:,.2f}" if extra_monthly > 0 else f"${monthly_payment_base:,.2f}")
-col3.metric("Total Interest (Standard)", f"${total_interest_standard:,.2f}")
-col4.metric("Loan Term", f"{loan_term_years} years")
+col2.metric("With Extra Monthly", f"${monthly_payment_with_extra:,.2f}" if extra_monthly > 0 else "—")
+col3.metric("Total Interest Paid", f"${total_interest_actual:,.2f}" if has_extras else f"${total_interest_standard:,.2f}")
+col4.metric("Total Amount Paid", f"${total_paid_actual:,.2f}")
 
-if extra_monthly > 0 or extra_one_time > 0:
-    st.success(f"🎉 With extras: Pay off in ~{actual_payments//12}y {actual_payments%12}m "
-               f"(saves ~{years_saved:.1f} years & ${total_interest_standard - total_interest_extra:,.0f} in interest!)")
+if has_extras:
+    st.success(f"🎉 With extra payments: Loan paid off in {actual_months//12} years, {actual_months%12} months "
+               f"({years_saved:.1f} years faster)\n"
+               f"→ Saves ${total_interest_standard - total_interest_actual:,.0f} in interest!")
 
 st.markdown("---")
 
-# Payment Breakdown Pie (First Month, including extra_monthly if set)
+# First Month Payment Breakdown (includes recurring extra if any)
 first_interest = principal * monthly_rate
-first_principal = monthly_pi - first_interest + extra_monthly  # Add extra to principal
-first_extra = extra_monthly if extra_monthly > 0 else None  # For pie slice if >0
+first_principal_base = monthly_pi - first_interest
+first_extra = extra_monthly
 
 labels = ["Principal", "Interest", "Property Tax", "Insurance"]
-values = [monthly_pi - first_interest, first_interest, monthly_tax, monthly_insurance]
+values = [first_principal_base, first_interest, monthly_tax, monthly_insurance]
 colors = ["#00CC96", "#EF553B", "#FFA15A", "#AB63FA"]
 
 if extra_monthly > 0:
-    labels.append("Extra Principal")
-    values.append(extra_monthly)
+    labels.append("Extra to Principal")
+    values.append(first_extra)
     colors.append("#636EFA")
 
 fig_pie = go.Figure(data=[go.Pie(
@@ -142,22 +142,24 @@ fig_pie = go.Figure(data=[go.Pie(
     marker_colors=colors,
     textinfo='label+percent'
 )])
-fig_pie.update_layout(title="First Month Payment Breakdown (PITI + Extra if any)", showlegend=False)
+fig_pie.update_layout(title="First Month Payment Breakdown")
 st.plotly_chart(fig_pie, use_container_width=True)
 
-# Interest Over Time Chart
-st.subheader("💰 Cumulative Interest Paid")
-if df_amort is not None:
+# Cumulative Interest Chart
+st.subheader("💰 Cumulative Interest Paid Over Time")
+if has_extras:
     fig_interest = go.Figure()
     fig_interest.add_trace(go.Scatter(x=df_amort["Month"], y=df_amort["Interest"].cumsum(),
                                       name="With Extra Payments", line=dict(color="#636EFA")))
-    standard_cum_interest = [(i * first_interest) for i in range(1, num_payments + 1)]  # Approx, but close
-    fig_interest.add_trace(go.Scatter(x=list(range(1, num_payments + 1)), y=standard_cum_interest,
+    # Approximate standard cumulative interest
+    standard_interest_per_month = principal * monthly_rate
+    standard_cum = [i * standard_interest_per_month for i in range(1, num_payments + 1)]
+    fig_interest.add_trace(go.Scatter(x=list(range(1, num_payments + 1)), y=standard_cum,
                                       name="Standard Schedule", line=dict(color="#EF553B", dash='dot')))
     fig_interest.update_layout(xaxis_title="Month", yaxis_title="Cumulative Interest ($)")
     st.plotly_chart(fig_interest, use_container_width=True)
 else:
-    st.info("Enter extra payments to see interest savings over time.")
+    st.info("Add extra payments to see how much interest you save over time.")
 
 # --- AMORTIZATION TABLE ---
 st.markdown("---")
@@ -184,7 +186,8 @@ if st.checkbox("Show full amortization table", value=False):
         df_amort = pd.DataFrame(standard_schedule)
     
     df_display = df_amort.copy()
-    for col in ["Total Payment", "Principal", "Interest", "Tax", "Insurance", "Extra", "Balance"]:
+    money_cols = ["Total Payment", "Principal", "Interest", "Tax", "Insurance", "Extra", "Balance"]
+    for col in money_cols:
         df_display[col] = df_display[col].map("${:,.2f}".format)
     
     st.dataframe(df_display, use_container_width=True)
@@ -212,12 +215,12 @@ if df_amort is not None:
             summary_data = {
                 "Metric": ["Home Price", "Down Payment", "Loan Principal", "Interest Rate", "Term (Years)",
                            "Base Monthly P&I", "Monthly Tax + Insurance", "Base Monthly (PITI)",
-                           "With Recurring Extra", "Total Paid", "Total Interest", "Extra Payments Savings"],
+                           "With Recurring Extra", "Total Amount Paid", "Total Interest Paid", "Payoff Time"],
                 "Value": [loan_amount, down_payment, principal, f"{interest_rate}%", loan_term_years,
                           monthly_pi, monthly_tax + monthly_insurance, monthly_payment_base,
                           f"{monthly_payment_with_extra:,.2f}" if extra_monthly > 0 else "N/A",
-                          total_paid_extra, total_interest_extra,
-                          f"Saves {years_saved:.1f} years & ${total_interest_standard - total_interest_extra:,.0f} interest" if (extra_monthly > 0 or extra_one_time > 0) else "N/A"]
+                          total_paid_actual, total_interest_actual,
+                          f"{actual_months//12}y {actual_months%12}m" if has_extras else f"{loan_term_years} years"]
             }
             pd.DataFrame(summary_data).to_excel(writer, index=False, sheet_name='Summary')
         buffer.seek(0)
@@ -227,4 +230,4 @@ if df_amort is not None:
             file_name=f"Mortgage_{datetime.now().strftime('%Y%m%d')}.xlsx"
         )
 
-st.caption("PITI calculations • 40/50-year terms • Extra payments • Current as of 2025 • Not financial advice")
+st.caption("Full PITI + extra payments • Accurate interest savings • 40/50-year terms • Current as of 2025 • Not financial advice")

@@ -8,7 +8,7 @@ from io import BytesIO
 st.set_page_config(page_title="Mortgage Calculator & Amortization 2025", layout="wide")
 
 st.title("🏠 Mortgage Calculator & Amortization Schedule")
-st.caption("Accurate monthly payments • Full amortization table • Extra payments impact • 2025 rates ready")
+st.caption("Accurate payments • Extended terms (40/50 years) • Property tax included • Extra payments • 2025 ready")
 
 # --- SIDEBAR INPUTS ---
 with st.sidebar:
@@ -22,7 +22,19 @@ with st.sidebar:
     st.metric("Loan Principal", f"${principal:,.2f}")
     
     interest_rate = st.slider("Annual Interest Rate (%)", min_value=2.0, max_value=12.0, value=6.75, step=0.125)
-    loan_term_years = st.selectbox("Loan Term (Years)", [15, 20, 30], index=2)
+    
+    # Extended terms added
+    loan_term_years = st.selectbox("Loan Term (Years)", [15, 20, 30, 40, 50], index=2)
+    
+    st.markdown("---")
+    st.header("🏡 Property Tax & Insurance (Optional)")
+    annual_property_tax = st.number_input("Annual Property Tax ($)", min_value=0.0, value=4800.0, step=100.0, help="Typical: 1-1.5% of home value")
+    annual_home_insurance = st.number_input("Annual Homeowners Insurance ($)", min_value=0.0, value=1200.0, step=100.0)
+    
+    monthly_tax = annual_property_tax / 12
+    monthly_insurance = annual_home_insurance / 12
+    
+    st.metric("Monthly Tax + Insurance", f"${monthly_tax + monthly_insurance:,.2f}")
     
     st.markdown("---")
     st.header("📅 Extra Payments (Optional)")
@@ -34,42 +46,50 @@ with st.sidebar:
 monthly_rate = interest_rate / 100 / 12
 num_payments = loan_term_years * 12
 
-# Standard monthly payment (without extras)
+# Base P&I payment
 if monthly_rate > 0:
-    monthly_payment = principal * (monthly_rate * (1 + monthly_rate)**num_payments) / ((1 + monthly_rate)**num_payments - 1)
+    monthly_pi = principal * (monthly_rate * (1 + monthly_rate)**num_payments) / ((1 + monthly_rate)**num_payments - 1)
 else:
-    monthly_payment = principal / num_payments
+    monthly_pi = principal / num_payments
+
+# Total monthly payment including tax & insurance
+monthly_payment = monthly_pi + monthly_tax + monthly_insurance
 
 total_paid_standard = monthly_payment * num_payments
-total_interest_standard = total_paid_standard - principal
+total_interest_standard = (monthly_pi * num_payments) - principal
+total_tax_paid = monthly_tax * num_payments
+total_insurance_paid = monthly_insurance * num_payments
 
-# With extra payments
+# With extra payments (applied only to principal)
 if extra_monthly > 0 or extra_one_time > 0:
-    # Build amortization with extras
     balance = principal
     schedule = []
     total_interest_extra = 0
     month = 0
     
-    while balance > 0 and month < num_payments * 2:  # safety limit
+    while balance > 0 and month < num_payments * 2:
         month += 1
         interest = balance * monthly_rate
         total_interest_extra += interest
         
-        # Apply one-time extra if applicable
         extra_this_month = extra_monthly
         if extra_one_time > 0 and month == extra_one_time_month:
             extra_this_month += extra_one_time
-            extra_one_time = 0  # only once
+            extra_one_time = 0
         
-        principal_payment = monthly_payment - interest + extra_this_month
+        # Principal payment = base P&I minus interest + extras
+        principal_payment = monthly_pi - interest + extra_this_month
         balance = max(0, balance - principal_payment)
+        
+        total_payment_this_month = monthly_pi + monthly_tax + monthly_insurance + extra_this_month
         
         schedule.append({
             "Month": month,
-            "Payment": monthly_payment + extra_this_month,
+            "Total Payment": total_payment_this_month,
             "Principal": principal_payment,
             "Interest": interest,
+            "Tax": monthly_tax,
+            "Insurance": monthly_insurance,
             "Extra": extra_this_month,
             "Balance": balance
         })
@@ -79,7 +99,7 @@ if extra_monthly > 0 or extra_one_time > 0:
     
     df_amort = pd.DataFrame(schedule)
     actual_payments = len(df_amort)
-    total_paid_extra = df_amort["Payment"].sum()
+    total_paid_extra = df_amort["Total Payment"].sum()
     total_interest_extra = df_amort["Interest"].sum()
     years_saved = (num_payments - actual_payments) / 12
 else:
@@ -90,75 +110,72 @@ else:
 
 # --- MAIN DASHBOARD ---
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Monthly Payment", f"${monthly_payment:,.2f}")
+col1.metric("Monthly Payment (PITI)", f"${monthly_payment:,.2f}")
 col2.metric("Total Interest (Standard)", f"${total_interest_standard:,.2f}")
 col3.metric("Total Paid (Standard)", f"${total_paid_standard:,.2f}")
 col4.metric("Loan Term", f"{loan_term_years} years")
 
 if extra_monthly > 0 or extra_one_time > 0:
-    st.success(f"🎉 With extras: Pay off in ~{actual_payments//12} years {actual_payments%12} months "
+    st.success(f"🎉 With extras: Pay off in ~{actual_payments//12}y {actual_payments%12}m "
                f"(saves ~{years_saved:.1f} years & ${total_interest_standard - total_interest_extra:,.0f} in interest!)")
 
 st.markdown("---")
 
-# Summary Cards
-col_a, col_b = st.columns(2)
-with col_a:
-    st.subheader("📊 Payment Breakdown (First Month)")
-    fig_pie = go.Figure(data=[go.Pie(
-        labels=["Principal", "Interest"],
-        values=[monthly_payment - (principal * monthly_rate), principal * monthly_rate],
-        hole=0.4,
-        marker_colors=["#00CC96", "#EF553B"],
-        textinfo='label+percent'
-    )])
-    fig_pie.update_layout(title="First Payment Split", showlegend=False)
-    st.plotly_chart(fig_pie, use_container_width=True)
+# Payment Breakdown Pie (First Month)
+first_interest = principal * monthly_rate
+first_principal = monthly_pi - first_interest
 
-with col_b:
-    st.subheader("💰 Interest Over Time")
-    if df_amort is not None:
-        fig_interest = go.Figure()
-        fig_interest.add_trace(go.Scatter(x=df_amort["Month"], y=df_amort["Interest"].cumsum(),
-                                          name="With Extras", line=dict(color="#636EFA")))
-        fig_interest.add_trace(go.Scatter(x=list(range(1, num_payments+1)),
-                                          y=[i * (monthly_payment - (principal * monthly_rate)) for i in range(1, num_payments+1)],
-                                          name="Standard", line=dict(color="#EF553B", dash='dot')))
-        fig_interest.update_layout(title="Cumulative Interest Paid", xaxis_title="Month", yaxis_title="Interest ($)")
-        st.plotly_chart(fig_interest, use_container_width=True)
-    else:
-        st.info("Add extra payments to see interest savings over time")
+fig_pie = go.Figure(data=[go.Pie(
+    labels=["Principal", "Interest", "Property Tax", "Insurance"],
+    values=[first_principal, first_interest, monthly_tax, monthly_insurance],
+    hole=0.4,
+    marker_colors=["#00CC96", "#EF553B", "#FFA15A", "#AB63FA"],
+    textinfo='label+percent'
+)])
+fig_pie.update_layout(title="First Month Payment Breakdown (PITI)")
+st.plotly_chart(fig_pie, use_container_width=True)
+
+# Interest Over Time Chart
+st.subheader("💰 Cumulative Interest Paid")
+if df_amort is not None:
+    fig_interest = go.Figure()
+    fig_interest.add_trace(go.Scatter(x=df_amort["Month"], y=df_amort["Interest"].cumsum(),
+                                      name="With Extra Payments", line=dict(color="#636EFA")))
+    standard_cum_interest = [(i * first_interest) for i in range(1, num_payments + 1)]
+    fig_interest.add_trace(go.Scatter(x=list(range(1, num_payments + 1)), y=standard_cum_interest,
+                                      name="Standard Schedule", line=dict(color="#EF553B", dash='dot')))
+    fig_interest.update_layout(xaxis_title="Month", yaxis_title="Cumulative Interest ($)")
+    st.plotly_chart(fig_interest, use_container_width=True)
+else:
+    st.info("Enter extra payments to see interest savings over time.")
 
 # --- AMORTIZATION TABLE ---
 st.markdown("---")
 st.subheader("📅 Full Amortization Schedule")
 
 if st.checkbox("Show full amortization table", value=False):
-    # Generate standard schedule if no extras
     if df_amort is None:
         balance = principal
         standard_schedule = []
         for month in range(1, num_payments + 1):
             interest = balance * monthly_rate
-            principal_payment = monthly_payment - interest
-            balance -= principal_payment
+            principal_payment = monthly_pi - interest
+            balance = max(0, balance - principal_payment)
             standard_schedule.append({
                 "Month": month,
-                "Payment": monthly_payment,
+                "Total Payment": monthly_payment,
                 "Principal": principal_payment,
                 "Interest": interest,
+                "Tax": monthly_tax,
+                "Insurance": monthly_insurance,
                 "Extra": 0.0,
-                "Balance": max(0, balance)
+                "Balance": balance
             })
         df_amort = pd.DataFrame(standard_schedule)
     
-    # Format for display
     df_display = df_amort.copy()
-    df_display["Payment"] = df_display["Payment"].map("${:,.2f}".format)
-    df_display["Principal"] = df_display["Principal"].map("${:,.2f}".format)
-    df_display["Interest"] = df_display["Interest"].map("${:,.2f}".format)
-    df_display["Extra"] = df_display["Extra"].map("${:,.2f}".format)
-    df_display["Balance"] = df_display["Balance"].map("${:,.2f}".format)
+    for col in ["Total Payment", "Principal", "Interest", "Tax", "Insurance", "Extra", "Balance"]:
+        df_display[col] = df_display[col].map("${:,.2f}".format)
     
     st.dataframe(df_display, use_container_width=True)
 
@@ -182,12 +199,13 @@ if df_amort is not None:
         buffer = BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df_amort.to_excel(writer, index=False, sheet_name='Amortization')
-            # Summary sheet
             summary_data = {
-                "Metric": ["Loan Amount", "Down Payment", "Principal", "Interest Rate", "Term (Years)",
-                           "Monthly Payment", "Total Paid", "Total Interest", "Extra Payments Impact"],
+                "Metric": ["Home Price", "Down Payment", "Loan Principal", "Interest Rate", "Term (Years)",
+                           "Monthly P&I", "Monthly Tax + Insurance", "Total Monthly (PITI)",
+                           "Total Paid", "Total Interest", "Extra Payments Savings"],
                 "Value": [loan_amount, down_payment, principal, f"{interest_rate}%", loan_term_years,
-                          monthly_payment, total_paid_extra, total_interest_extra,
+                          monthly_pi, monthly_tax + monthly_insurance, monthly_payment,
+                          total_paid_extra, total_interest_extra,
                           f"Saves {years_saved:.1f} years & ${total_interest_standard - total_interest_extra:,.0f} interest" if (extra_monthly > 0 or extra_one_time > 0) else "N/A"]
             }
             pd.DataFrame(summary_data).to_excel(writer, index=False, sheet_name='Summary')
@@ -198,4 +216,4 @@ if df_amort is not None:
             file_name=f"Mortgage_{datetime.now().strftime('%Y%m%d')}.xlsx"
         )
 
-st.caption("Precise amortization • Extra payments supported • Current as of 2025 • Not financial advice")
+st.caption("PITI calculations • 40/50-year terms • Extra payments • Current as of 2025 • Not financial advice")

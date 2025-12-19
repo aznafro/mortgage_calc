@@ -38,7 +38,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.header("📅 Extra Payments (Optional)")
-    extra_monthly = st.number_input("Extra Monthly Payment ($)", min_value=0.0, value=0.0, step=50.0)
+    extra_monthly = st.number_input("Extra Monthly Payment ($)", min_value=0.0, value=0.0, step=50.0, help="Applied to principal each month")
     extra_one_time = st.number_input("One-Time Extra Payment ($)", min_value=0.0, value=0.0, step=1000.0)
     extra_one_time_month = st.slider("Apply One-Time Payment in Month #", min_value=1, max_value=loan_term_years*12, value=12, disabled=(extra_one_time == 0))
 
@@ -52,15 +52,16 @@ if monthly_rate > 0:
 else:
     monthly_pi = principal / num_payments
 
-# Total monthly payment including tax & insurance
-monthly_payment = monthly_pi + monthly_tax + monthly_insurance
+# Monthly payment with extras (recurring extra_monthly added)
+monthly_payment_base = monthly_pi + monthly_tax + monthly_insurance
+monthly_payment_with_extra = monthly_payment_base + extra_monthly
 
-total_paid_standard = monthly_payment * num_payments
+total_paid_standard = monthly_payment_base * num_payments
 total_interest_standard = (monthly_pi * num_payments) - principal
 total_tax_paid = monthly_tax * num_payments
 total_insurance_paid = monthly_insurance * num_payments
 
-# With extra payments (applied only to principal)
+# With extra payments
 if extra_monthly > 0 or extra_one_time > 0:
     balance = principal
     schedule = []
@@ -77,7 +78,6 @@ if extra_monthly > 0 or extra_one_time > 0:
             extra_this_month += extra_one_time
             extra_one_time = 0
         
-        # Principal payment = base P&I minus interest + extras
         principal_payment = monthly_pi - interest + extra_this_month
         balance = max(0, balance - principal_payment)
         
@@ -110,9 +110,9 @@ else:
 
 # --- MAIN DASHBOARD ---
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Monthly Payment (PITI)", f"${monthly_payment:,.2f}")
-col2.metric("Total Interest (Standard)", f"${total_interest_standard:,.2f}")
-col3.metric("Total Paid (Standard)", f"${total_paid_standard:,.2f}")
+col1.metric("Base Monthly Payment (PITI)", f"${monthly_payment_base:,.2f}")
+col2.metric("With Extra Monthly", f"${monthly_payment_with_extra:,.2f}" if extra_monthly > 0 else f"${monthly_payment_base:,.2f}")
+col3.metric("Total Interest (Standard)", f"${total_interest_standard:,.2f}")
 col4.metric("Loan Term", f"{loan_term_years} years")
 
 if extra_monthly > 0 or extra_one_time > 0:
@@ -121,18 +121,28 @@ if extra_monthly > 0 or extra_one_time > 0:
 
 st.markdown("---")
 
-# Payment Breakdown Pie (First Month)
+# Payment Breakdown Pie (First Month, including extra_monthly if set)
 first_interest = principal * monthly_rate
-first_principal = monthly_pi - first_interest
+first_principal = monthly_pi - first_interest + extra_monthly  # Add extra to principal
+first_extra = extra_monthly if extra_monthly > 0 else None  # For pie slice if >0
+
+labels = ["Principal", "Interest", "Property Tax", "Insurance"]
+values = [monthly_pi - first_interest, first_interest, monthly_tax, monthly_insurance]
+colors = ["#00CC96", "#EF553B", "#FFA15A", "#AB63FA"]
+
+if extra_monthly > 0:
+    labels.append("Extra Principal")
+    values.append(extra_monthly)
+    colors.append("#636EFA")
 
 fig_pie = go.Figure(data=[go.Pie(
-    labels=["Principal", "Interest", "Property Tax", "Insurance"],
-    values=[first_principal, first_interest, monthly_tax, monthly_insurance],
+    labels=labels,
+    values=values,
     hole=0.4,
-    marker_colors=["#00CC96", "#EF553B", "#FFA15A", "#AB63FA"],
+    marker_colors=colors,
     textinfo='label+percent'
 )])
-fig_pie.update_layout(title="First Month Payment Breakdown (PITI)")
+fig_pie.update_layout(title="First Month Payment Breakdown (PITI + Extra if any)", showlegend=False)
 st.plotly_chart(fig_pie, use_container_width=True)
 
 # Interest Over Time Chart
@@ -141,7 +151,7 @@ if df_amort is not None:
     fig_interest = go.Figure()
     fig_interest.add_trace(go.Scatter(x=df_amort["Month"], y=df_amort["Interest"].cumsum(),
                                       name="With Extra Payments", line=dict(color="#636EFA")))
-    standard_cum_interest = [(i * first_interest) for i in range(1, num_payments + 1)]
+    standard_cum_interest = [(i * first_interest) for i in range(1, num_payments + 1)]  # Approx, but close
     fig_interest.add_trace(go.Scatter(x=list(range(1, num_payments + 1)), y=standard_cum_interest,
                                       name="Standard Schedule", line=dict(color="#EF553B", dash='dot')))
     fig_interest.update_layout(xaxis_title="Month", yaxis_title="Cumulative Interest ($)")
@@ -163,7 +173,7 @@ if st.checkbox("Show full amortization table", value=False):
             balance = max(0, balance - principal_payment)
             standard_schedule.append({
                 "Month": month,
-                "Total Payment": monthly_payment,
+                "Total Payment": monthly_payment_base,
                 "Principal": principal_payment,
                 "Interest": interest,
                 "Tax": monthly_tax,
@@ -201,10 +211,11 @@ if df_amort is not None:
             df_amort.to_excel(writer, index=False, sheet_name='Amortization')
             summary_data = {
                 "Metric": ["Home Price", "Down Payment", "Loan Principal", "Interest Rate", "Term (Years)",
-                           "Monthly P&I", "Monthly Tax + Insurance", "Total Monthly (PITI)",
-                           "Total Paid", "Total Interest", "Extra Payments Savings"],
+                           "Base Monthly P&I", "Monthly Tax + Insurance", "Base Monthly (PITI)",
+                           "With Recurring Extra", "Total Paid", "Total Interest", "Extra Payments Savings"],
                 "Value": [loan_amount, down_payment, principal, f"{interest_rate}%", loan_term_years,
-                          monthly_pi, monthly_tax + monthly_insurance, monthly_payment,
+                          monthly_pi, monthly_tax + monthly_insurance, monthly_payment_base,
+                          f"{monthly_payment_with_extra:,.2f}" if extra_monthly > 0 else "N/A",
                           total_paid_extra, total_interest_extra,
                           f"Saves {years_saved:.1f} years & ${total_interest_standard - total_interest_extra:,.0f} interest" if (extra_monthly > 0 or extra_one_time > 0) else "N/A"]
             }
